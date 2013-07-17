@@ -367,7 +367,7 @@ def main():
                     break
 
                 except Exception as e:
-                    if (args.verbosity == logging.DEBUG):
+                    if args.verbosity == logging.DEBUG:
                         logger.critical(e.args)
                         raise
                     logger.warning(

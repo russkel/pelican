@@ -10,7 +10,13 @@ try:
     import docutils
     import docutils.core
     import docutils.io
-    from docutils.writers.html4css1 import HTMLTranslator
+    import docutils.readers.standalone
+    import docutils.parsers.rst
+    #from docutils.writers.html4css1 import HTMLTranslator
+
+    import rst2html5
+    from genshi.builder import tag
+    from genshi.output import XHTMLSerializer
 
     # import the directives to have pygments support
     from pelican import rstdirectives  # NOQA
@@ -71,29 +77,8 @@ class Reader(object):
         return content, metadata
 
 
-class _FieldBodyTranslator(HTMLTranslator):
-
-    def __init__(self, document):
-        HTMLTranslator.__init__(self, document)
-        self.compact_p = None
-
-    def astext(self):
-        return ''.join(self.body)
-
-    def visit_field_body(self, node):
-        pass
-
-    def depart_field_body(self, node):
-        pass
-
-
-def render_node_to_html(document, node):
-    visitor = _FieldBodyTranslator(document)
-    node.walkabout(visitor)
-    return visitor.astext()
-
-
-class PelicanHTMLTranslator(HTMLTranslator):
+# TODO FIX
+class PelicanHTML5Translator(rst2html5.HTML5Translator):
 
     def visit_abbreviation(self, node):
         attrs = {}
@@ -112,38 +97,28 @@ class RstReader(Reader):
     def __init__(self, *args, **kwargs):
         super(RstReader, self).__init__(*args, **kwargs)
 
-    def _parse_metadata(self, document):
+    def _parse_metadata(self, metadata):
         """Return the dict containing document metadata"""
-        output = {}
-        for docinfo in document.traverse(docutils.nodes.docinfo):
-            for element in docinfo.children:
-                if element.tagname == 'field':  # custom fields (e.g. summary)
-                    name_elem, body_elem = element.children
-                    name = name_elem.astext()
-                    if name == 'summary':
-                        value = render_node_to_html(document, body_elem)
-                    else:
-                        value = body_elem.astext()
-                else:  # standard fields (e.g. address)
-                    name = element.tagname
-                    value = element.astext()
-                name = name.lower()
-
-                output[name] = self.process_metadata(name, value)
-        return output
+        return {k.lower(): self.process_metadata(k.lower(), v)
+                for k, v in metadata.items()}
 
     def _get_publisher(self, source_path):
         extra_params = {'initial_header_level': '2',
+                        'indent_output': True,
                         'syntax_highlight': 'short',
-                        'input_encoding': 'utf-8'}
+                        'input_encoding': 'utf-8',
+                        'script': None,  # TODO this should not be required. fix the defaulting in rst2html5
+                        'traceback': True # TODO remove this when finished
+                        }
         user_params = self.settings.get('DOCUTILS_SETTINGS')
         if user_params:
             extra_params.update(user_params)
 
         pub = docutils.core.Publisher(
+            reader=docutils.readers.standalone.Reader(),
+            parser=docutils.parsers.rst.Parser(),
+            writer=rst2html5.HTML5Writer(),
             destination_class=docutils.io.StringOutput)
-        pub.set_components('standalone', 'restructuredtext', 'html')
-        pub.writer.translator_class = PelicanHTMLTranslator
         pub.process_programmatic_settings(None, extra_params, None)
         pub.set_source(source_path=source_path)
         pub.publish()
@@ -155,7 +130,18 @@ class RstReader(Reader):
         parts = pub.writer.parts
         content = parts.get('body')
 
-        metadata = self._parse_metadata(pub.document)
+        # warning: hax hax hax hax!
+        # TODO somehow remove this hack
+        import lxml.etree, lxml.html
+        doc = lxml.html.fromstring(content)
+
+        # remove the redundant title tag
+        if doc[0].tag == "h1":
+            del doc[0]
+            content = "".join(lxml.html.tostring(fragment) for fragment in doc)
+        # end hax zone.
+
+        metadata = self._parse_metadata(parts['docinfo'])
         metadata.setdefault('title', parts.get('title'))
 
         return content, metadata
